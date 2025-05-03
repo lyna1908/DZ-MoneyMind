@@ -1,405 +1,550 @@
 import queue
-import math
-import heapq
+import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
+from math import radians, sin, cos, sqrt, atan2
+from copy import deepcopy
 
 # ------------------------------
-# 1. Node Class 
+# 1. Node Class Definition
 # ------------------------------
 class SpendingNode:
-    def __init__(self, state, parent=None, action=None, path_cost=0, depth=0):
+    def __init__(self, state, parent=None, level=0, g=0, h=0):
         """
-        Initialize a node for the spending allocation search.
+        Initialize a spending plan node.
         
-        Parameters:
-            - state: Dictionary of spending allocations by category
-            - parent: Parent node
-            - action: Action that led to this state (category and amount)
-            - path_cost: Cost to reach this node (g value)
-            - depth: Depth in the search tree
+        Input Parameters:
+            - state: Dictionary representing category-value pairs for the spending plan
+                    Example: {'food': 900, 'education': 350, 'savings': 500, 'transport': 250}
+            - parent: The parent SpendingNode that generated this node. Default is None.
+            - level: The level in the tree (related to which category priority is being set)
+            - g: The cost function value (deviation from optimal spending). Default is 0.
+            - h: The heuristic value (estimate of future cost). Default is 0.
+            
+        Output:
+            - A SpendingNode instance with attributes: state, parent, level, g, h, and f.
         """
-        self.state = state  # Dictionary of spending allocations
+        self.state = state.copy()
         self.parent = parent
-        self.action = action
-        self.g = path_cost  # g(n) value
-        self.depth = depth
-        self.h = 0  # Will be set during evaluation
-        self.f = 0  # Will be set during evaluation
-        self.id = id(self)  # Unique identifier for the node
+        self.level = level
+        self.g = g  # Actual cost from start to this node
+        self.h = h  # Heuristic cost
+        self.f = g + h  # Total evaluation function
     
-    def get_path(self):
-        """Return the path from root to this node."""
-        path = []
-        current = self
-        while current:
-            path.append(current)
-            current = current.parent
-        return list(reversed(path))
+    def __lt__(self, other):
+        """
+        Compare this node with another node based on the evaluation function (f).
+        Used for priority queue ordering.
+        """
+        return self.f < other.f
+    
+    def __eq__(self, other):
+        """
+        Check equality with another SpendingNode based on the state.
+        """
+        return isinstance(other, SpendingNode) and self.state == other.state
+    
+    def __hash__(self):
+        """
+        Compute a hash value for the node.
+        """
+        return hash(tuple(sorted(self.state.items())))
 
 # ------------------------------
-# 2. Problem Definition
+# 2. SpendingAllocationProblem Class
 # ------------------------------
 class SpendingAllocationProblem:
-    def __init__(self, salary, categories, priorities, fixed_expenses=None, savings_priority=None):
+    def __init__(self, salary, priorities, user_input_plan, num_children=0, 
+                 has_car=False, has_house=False, fixed_categories=None, dataset=None):
         """
         Initialize the spending allocation problem.
         
-        Parameters:
-            - salary: Total monthly salary
-            - categories: List of spending categories
-            - priorities: Dictionary mapping categories to priority values
-            - fixed_expenses: Dictionary of non-reducible expenses
-            - savings_priority: Priority value for savings
+        Input Parameters:
+            - salary: User's monthly salary
+            - priorities: Dictionary of categories with their priority values (lower is higher priority)
+                         Example: {'food': 1, 'education': 2, 'savings': 3, 'transport': 4}
+            - user_input_plan: User's initial spending plan
+                              Example: {'food': 900, 'education': 350, 'savings': 500, 'transport': 250}
+            - num_children: Number of children the user has
+            - has_car: Boolean indicating if the user owns a car
+            - has_house: Boolean indicating if the user owns a house
+            - fixed_categories: Dictionary of categories with fixed spending amounts
+            - dataset: Dataframe containing spending patterns data
+            
+        Output:
+            - An instance of SpendingAllocationProblem with problem attributes initialized
         """
         self.salary = salary
-        self.categories = categories
         self.priorities = priorities
-        self.fixed_expenses = fixed_expenses or {}
-        self.available_amount = salary - sum(self.fixed_expenses.values())
-        self.max_priority = max(priorities.values()) if priorities else 0
-        self.savings_priority = savings_priority or self.calculate_savings_priority()
-        self.initial_state = {category: 0 for category in categories}
-        for category, amount in self.fixed_expenses.items():
-            if category in self.initial_state:
-                self.initial_state[category] = amount
+        self.categories = list(priorities.keys())
+        self.fixed_categories = fixed_categories or {}
+        self.user_input_plan = user_input_plan
+        self.num_children = num_children
+        self.has_car = has_car
+        self.has_house = has_house
+        self.dataset = dataset
         
-        # Step size for allocations (can be tuned)
-        self.step_size = max(100, int(salary * 0.01))  # 1% of salary or minimum 100
+        # Filter dataset rows according to user conditions
+        self.filtered_dataset = self.filter_dataset()
         
+        # Create initial state from user input plan
+        self.initial_state = self.create_initial_state()
+        
+        # Calculate savings priority
+        self.max_priority = max(priorities.values())
+        self.savings_priority = self.calculate_savings_priority()
+        
+        # Sort categories by priority (lowest value = highest priority)
+        self.sorted_categories = sorted(self.priorities.keys(), key=lambda x: self.priorities[x])
+    
+    def filter_dataset(self):
+        """
+        Filter the dataset based on user conditions (children, car, house).
+        """
+        if self.dataset is None:
+            return []
+            
+        filtered = self.dataset.copy()
+        
+        # Filter by number of children if that column exists
+        if 'children' in filtered.columns:
+            filtered = filtered[filtered['children'] == self.num_children]
+            
+        # Filter by car ownership if that column exists
+        if 'has_car' in filtered.columns:
+            filtered = filtered[filtered['has_car'] == self.has_car]
+            
+        # Filter by house ownership if that column exists
+        if 'has_house' in filtered.columns:
+            filtered = filtered[filtered['has_house'] == self.has_house]
+            
+        return filtered
+    
     def calculate_savings_priority(self):
-        """Calculate saving priority based on formula if not provided."""
-        # Using formula from the project: P_saving = 5 - (Salary/100000) + 0.5 * Children + (1-H) + 0.5 * Car
-        # Simplified version for now
-        return 5 - (self.salary / 100000)
+        """
+        Calculate savings priority based on salary and number of children.
+        Higher value means savings is more important.
+        """
+        return (self.salary / 25000) - 0.75 * self.num_children
     
-    def compute_normalization_factor(self, state):
-        """Compute normalization factor 'a' for ideal spending percentages."""
-        sum_terms = sum((self.max_priority - self.priorities[cat] + 1) for cat in self.categories)
-        savings_term = self.max_priority - self.savings_priority + 1
-        return 1 / (savings_term + sum_terms)
+    def create_initial_state(self):
+        """
+        Create the initial user plan:
+        - Fixed expenses are already set.
+        - Other categories are taken from user input or default to 0.
+        """
+        state = {category: 0 for category in self.categories}
+        
+        # Fill in user-defined or fixed values
+        for category in self.categories:
+            if category in self.fixed_categories:
+                state[category] = self.fixed_categories[category]
+            elif category in self.user_input_plan:
+                state[category] = self.user_input_plan[category]
+        
+        return state
     
-    def deviation(self, amount, category, state):
-        """Calculate deviation from ideal spending for a category."""
-        a = self.compute_normalization_factor(state)
-        ideal = a * (self.max_priority - self.priorities[category] + 1)
-        return abs((amount / self.salary) - ideal)
+    def is_goal_state(self, state):
+        """
+        Check if a state is a goal state:
+        - Total spending is within +/- 5% of salary
+        - Savings are at least 10% of salary
+        - No category is underfunded below minimum threshold
+        
+        Input Parameters:
+            - state: A dictionary of spending values for each category
+            
+        Output:
+            - Boolean: True if the state meets all goal criteria, False otherwise
+        """
+        total_spending = sum(state.values())
+        savings = self.salary - total_spending
+        
+        # Check if total spending is within +/- 5% of salary
+        spending_in_range = (self.salary * 0.95) <= total_spending <= (self.salary * 1.05)
+        
+        # Check if savings are at least 10% of salary
+        min_savings = 0.1 * self.salary  # 10% of salary
+        sufficient_savings = savings >= min_savings
+        
+        # Check if any category is underfunded
+        min_category_value = 1000  # Example minimum threshold, adjust as needed
+        underfunded = any(state[cat] < min_category_value for cat in state 
+                         if cat not in self.fixed_categories and cat != 'savings')
+        
+        return spending_in_range and sufficient_savings and not underfunded
     
-    def category_cost(self, amount, category, state):
-        """Calculate cost for a specific category's spending."""
-        if amount == 0:
-            return 0
-        a = self.compute_normalization_factor(state)
-        return amount * self.deviation(amount, category, state) * self.priorities[category]
-    
-    def total_cost(self, state):
-        """Calculate total cost of a spending plan."""
+    def get_heuristic(self, state):
+        """
+        Calculate heuristic value for a state.
+        This estimates how far the state is from being optimal.
+        
+        Input Parameters:
+            - state: A dictionary of spending values for each category
+            
+        Output:
+            - A numerical value representing the heuristic estimate
+        """
         total_spent = sum(state.values())
         savings = self.salary - total_spent
         
-        # Sum of costs for all categories
-        category_costs = sum(self.category_cost(state[cat], cat, state) for cat in self.categories)
+        # Penalty for deviation from salary
+        salary_deviation = abs(total_spent - self.salary)
         
-        # Add savings cost
-        savings_cost = savings * self.savings_priority
+        # Penalty for insufficient savings
+        min_savings = 0.1 * self.salary
+        savings_penalty = max(0, min_savings - savings) * 2  # Multiply by 2 to give more weight
         
-        return category_costs + savings_cost
+        # Penalty for priorities mismatch
+        priority_penalty = 0
+        for category, priority in self.priorities.items():
+            # Lower priority values (higher actual priority) should have higher spending
+            # Calculate ideal spending for each category based on priority
+            if category not in self.fixed_categories:
+                inverse_priority = self.max_priority - priority + 1
+                ideal_percentage = inverse_priority / sum(self.max_priority - p + 1 
+                                                         for p in self.priorities.values() 
+                                                         if category not in self.fixed_categories
+)
+                                                        
+                ideal_spending = ideal_percentage * (self.salary * 0.9)  # Assuming 10% savings
+                priority_penalty += abs(state[category] - ideal_spending) * inverse_priority
+        
+        return salary_deviation + savings_penalty + priority_penalty / 100
     
-    def heuristic(self, state):
-        """Estimate cost to reach an optimal solution from current state."""
-        # Remaining categories that aren't fully allocated yet
-        unallocated_cats = [cat for cat in self.categories 
-                           if cat not in self.fixed_expenses and state[cat] < self.available_amount]
+    def get_cost(self, state):
+        """
+        Calculate the actual cost of a state.
+        This measures how much the state deviates from the optimal solution.
         
-        if not unallocated_cats:
-            return 0
-        
-        # Simple heuristic: average deviation across remaining categories
-        a = self.compute_normalization_factor(state)
-        total_deviation = 0
-        
-        for cat in unallocated_cats:
-            ideal_amount = a * (self.max_priority - self.priorities[cat] + 1) * self.salary
-            current_deviation = abs(state[cat] - ideal_amount)
-            total_deviation += current_deviation * self.priorities[cat]
+        Input Parameters:
+            - state: A dictionary of spending values for each category
             
-        # Scale by number of categories to keep it admissible
-        return total_deviation / len(unallocated_cats)
-    
-    def is_goal(self, state):
-        """Check if state is a complete valid allocation."""
+        Output:
+            - A numerical value representing the cost
+        """
         total_spent = sum(state.values())
-        # Within 1% of total salary is considered a complete allocation
-        return abs(total_spent - self.salary) <= (self.salary * 0.01)
-    
-    def get_valid_actions(self, state):
-        """Get all valid actions (category allocations) from current state."""
-        actions = []
-        total_spent = sum(state.values())
-        remaining = self.salary - total_spent
+        savings = self.salary - total_spent
         
-        if remaining <= 0:
-            return []
-            
-        step = min(self.step_size, remaining)
+        # Cost for deviation from salary
+        cost = abs(total_spent - self.salary)
         
-        for category in self.categories:
-            # Skip fixed expense categories
-            if category in self.fixed_expenses:
-                continue
-                
-            # Add action to increase spending in this category
-            actions.append((category, step))
-            
-        return actions
+        # Additional cost if savings are below minimum
+        min_savings = 0.1 * self.salary
+        if savings < min_savings:
+            cost += (min_savings - savings) * (1 + self.savings_priority)
+        
+        # Cost for not respecting priorities
+        for category, priority in self.priorities.items():
+            if category not in self.fixed_categories:
+                # Higher priority categories (lower value) should have less deviation
+                inverse_priority = self.max_priority - priority + 1
+                if category in state:
+                    # If this is the savings category, use savings_priority
+                    if category == 'savings':
+                        weight = self.savings_priority
+                    else:
+                        weight = inverse_priority / self.max_priority
+                    
+                    # Calculate ideal value - simplified for demonstration
+                    ideal_value = self.salary * (0.1 + 0.1 * weight)
+                    cost += abs(state[category] - ideal_value) * weight
+        
+        return cost
     
     def expand_node(self, node):
-        """Generate child nodes from the current node."""
+        """
+        Generate children nodes by exploring different values for the current priority category.
+        
+        Input Parameters:
+            - node: The current SpendingNode to expand
+            
+        Output:
+            - A list of child SpendingNode instances
+        """
+        # If we've set values for all categories, return empty list
+        if node.level >= len(self.sorted_categories):
+            return []
+        
+        current_category = self.sorted_categories[node.level]
         children = []
-        actions = self.get_valid_actions(node.state)
         
-        for category, amount in actions:
-            # Create a new state by adding the amount to the category
-            new_state = node.state.copy()
-            new_state[category] += amount
-            
-            # Calculate path cost (g value)
-            path_cost = self.total_cost(new_state)
-            
-            # Create a new node
-            child = SpendingNode(
-                state=new_state,
+        # Skip fixed categories
+        if current_category in self.fixed_categories:
+            # Create a child with the fixed value and increment level
+            child_state = node.state.copy()
+            child_state[current_category] = self.fixed_categories[current_category]
+            child_node = SpendingNode(
+                state=child_state,
                 parent=node,
-                action=(category, amount),
-                path_cost=path_cost,
-                depth=node.depth + 1
+                level=node.level + 1,
+                g=self.get_cost(child_state),
+                h=self.get_heuristic(child_state)
             )
+            children.append(child_node)
+            return children
+        
+        # Get unique values for current category from filtered dataset
+        if not self.filtered_dataset.empty and current_category in self.filtered_dataset.columns:
+            unique_values = set(self.filtered_dataset[current_category].unique())
+        else:
+            # If no data available, generate some reasonable values
+            base_value = self.user_input_plan.get(current_category, self.salary * 0.1)
+            unique_values = {
+                max(100, base_value * 0.7),
+                base_value,
+                min(self.salary * 0.5, base_value * 1.3)
+            }
+        
+        # Create child nodes for each possible value
+        for value in unique_values:
+            if current_category in self.fixed_categories and value != self.fixed_categories[current_category]:
+                continue  # Skip if it's a fixed category with a different value
+                
+            child_state = node.state.copy()
+            child_state[current_category] = value
             
-            # Calculate heuristic (h value)
-            child.h = self.heuristic(new_state)
-            
-            # Calculate f value
-            child.f = child.g + child.h
-            
-            children.append(child)
-            
+            child_node = SpendingNode(
+                state=child_state,
+                parent=node,
+                level=node.level + 1,
+                g=self.get_cost(child_state),
+                h=self.get_heuristic(child_state)
+            )
+            children.append(child_node)
+        
         return children
-    
-    def print_node(self, node):
-        """Print node information for debugging."""
-        print(f"Depth: {node.depth}, Actions so far: {node.action}")
-        print(f"Current state: {node.state}")
-        print(f"Total spent: {sum(node.state.values())}/{self.salary}")
-        print(f"f(n) = g(n) + h(n) = {node.g} + {node.h} = {node.f}")
-        print("-" * 40)
 
 # ------------------------------
-# 3. A* Search Implementation with Separate Score Queue
+# 3. A* Search Implementation
 # ------------------------------
-class SpendingSearch:
-    def __init__(self, problem):
-        """
-        Initialize the search process with a spending problem instance.
+def astar_search(problem, max_iterations=1000):
+    """
+    Perform A* search to find an optimal spending plan.
+    
+    Input Parameters:
+        - problem: An instance of SpendingAllocationProblem
+        - max_iterations: Maximum number of iterations to prevent infinite loops
         
-        Parameters:
-            - problem: An instance of SpendingAllocationProblem
-        """
-        self.problem = problem
+    Output:
+        - A SpendingNode instance representing the goal state if found, otherwise None
+    """
+    # Create initial node
+    initial_node = SpendingNode(
+        state=problem.initial_state,
+        level=0,
+        g=problem.get_cost(problem.initial_state),
+        h=problem.get_heuristic(problem.initial_state)
+    )
+    
+    # Initialize priority queue
+    frontier = queue.PriorityQueue()
+    frontier.put(initial_node)
+    
+    # Keep track of explored states and states in frontier
+    explored = set()
+    frontier_states = {hash(initial_node)}
+    
+    iterations = 0
+    while not frontier.empty() and iterations < max_iterations:
+        iterations += 1
         
-    def search(self, max_iterations=1000):
-        """
-        Execute A* search to find optimal spending allocation.
+        # Get node with lowest f value
+        current_node = frontier.get()
+        frontier_states.remove(hash(current_node))
         
-        Parameters:
-            - max_iterations: Maximum number of nodes to expand
+        # Print current node state for debugging
+        print(f"Iteration {iterations}: Exploring node at level {current_node.level}")
+        print(f"Current state: {current_node.state}")
+        print(f"f = {current_node.f} (g = {current_node.g}, h = {current_node.h})")
+        
+        # Check if current node is goal state
+        if problem.is_goal_state(current_node.state):
+            print("\nGoal state found!")
+            return current_node
+        
+        # Add to explored set
+        state_hash = hash(current_node)
+        explored.add(state_hash)
+        
+        # Expand current node
+        children = problem.expand_node(current_node)
+        print(f"Generated {len(children)} children nodes")
+        
+        # Process each child node
+        for child in children:
+            child_hash = hash(child)
             
-        Returns:
-            - A SpendingNode instance representing the goal if found, otherwise None
-        """
-        # Initialize data structures
-        # 1. Regular frontier (just nodes)
-        frontier = {}  # Dictionary to store nodes: {node_id: node}
-        # 2. Score queue (min heap priority queue for scores)
-        score_queue = []  # Min heap for scores with node_id
-        
-        explored = set()
-        
-        # Create initial node
-        initial_node = SpendingNode(self.problem.initial_state.copy())
-        initial_node.g = self.problem.total_cost(initial_node.state)
-        initial_node.h = self.problem.heuristic(initial_node.state)
-        initial_node.f = initial_node.g + initial_node.h
-        
-        # Add to frontier and score queue
-        frontier[initial_node.id] = initial_node
-        heapq.heappush(score_queue, (initial_node.f, initial_node.id))
-        
-        iterations = 0
-        
-        print("Starting A* search with separate score queue...")
-        
-        while score_queue and iterations < max_iterations:
-            iterations += 1
-            
-            # Get the node with lowest f score from score queue
-            score, node_id = heapq.heappop(score_queue)
-            
-            # Get the corresponding node from frontier
-            node = frontier.pop(node_id)
-            
-            # Print node information (can be commented out)
-            if iterations % 50 == 0:  # Only print every 50th node to reduce output
-                print(f"Iteration {iterations}:")
-                self.problem.print_node(node)
-            
-            # Check if goal
-            if self.problem.is_goal(node.state):
-                print("Success! Found optimal allocation after", iterations, "iterations")
-                return node
-            
-            # Add to explored
-            # Convert state dict to tuple for hashing
-            state_tuple = tuple(sorted(node.state.items()))
-            explored.add(state_tuple)
-            
-            # Expand node
-            for child in self.problem.expand_node(node):
-                # Convert child state to tuple for hashing
-                child_state_tuple = tuple(sorted(child.state.items()))
+            # Skip if already explored or in frontier with lower cost
+            if child_hash in explored:
+                continue
                 
-                if child_state_tuple not in explored:
-                    # Check if a node with this state is already in frontier
-                    duplicate = False
-                    for existing_id, existing_node in frontier.items():
-                        if tuple(sorted(existing_node.state.items())) == child_state_tuple:
-                            # If existing node has worse score, replace it
-                            if existing_node.f > child.f:
-                                # Remove from score queue (will be marked as removed)
-                                # We'll add a new entry instead
-                                frontier[existing_id] = child
-                                heapq.heappush(score_queue, (child.f, existing_id))
-                            duplicate = True
-                            break
-                    
-                    if not duplicate:
-                        # Add to frontier and score queue
-                        frontier[child.id] = child
-                        heapq.heappush(score_queue, (child.f, child.id))
-                
-        print(f"Search terminated after {iterations} iterations without finding a goal")
-        if iterations >= max_iterations:
-            print("Search reached maximum iterations limit")
-        return None
+            if child_hash in frontier_states:
+                # This is a simplification; in a real implementation, 
+                # we would need to update the node in the frontier if this one has lower cost
+                continue
+            
+            # Add child to frontier
+            frontier.put(child)
+            frontier_states.add(child_hash)
+        
+        print("-" * 50)
+    
+    print("\nNo solution found within iteration limit.")
+    return None
 
 # ------------------------------
-# 4. Visualization Functions
+# 4. Utility Functions
 # ------------------------------
-def visualize_spending_plan(solution_node, problem):
+def reconstruct_path(node):
     """
-    Create visualizations for the optimal spending plan.
+    Reconstruct the path from the initial state to the goal.
     
-    Parameters:
-        - solution_node: The goal node with optimal allocations
-        - problem: The problem instance
+    Input Parameters:
+        - node: The goal SpendingNode
+        
+    Output:
+        - A list of states representing the path
     """
-    if not solution_node:
-        print("No solution to visualize")
-        return
+    path = []
+    current = node
     
-    # Extract the spending plan
-    spending_plan = solution_node.state
+    while current:
+        path.append(current.state)
+        current = current.parent
     
-    # Calculate percentages
-    total = sum(spending_plan.values())
-    percentages = {cat: (amount/total)*100 for cat, amount in spending_plan.items()}
+    path.reverse()  # Reverse to get path from start to goal
+    return path
+
+def plan_to_dataframe(plan):
+    """
+    Convert a spending plan to a DataFrame for visualization.
     
-    # Prepare data for plotting
-    categories = list(spending_plan.keys())
-    amounts = [spending_plan[cat] for cat in categories]
+    Input Parameters:
+        - plan: A dictionary of category-value pairs
+        
+    Output:
+        - A pandas DataFrame
+    """
+    df = pd.DataFrame([plan])
+    df = df.T.reset_index()
+    df.columns = ['Category', 'Amount']
+    return df
+
+def optimize_user_plan(user_salary, user_priorities, user_plan, num_children=0,
+                      has_car=False, has_house=False, fixed_categories=None, dataset=None):
+    """
+    Optimize a user's spending plan using A* search.
     
-    # Create a pie chart
-    plt.figure(figsize=(10, 7))
-    plt.pie(amounts, labels=categories, autopct='%1.1f%%', startangle=140)
-    plt.axis('equal')  # Equal aspect ratio ensures that pie is drawn as a circle
-    plt.title('Optimal Spending Allocation')
-    plt.show()
+    Input Parameters:
+        - user_salary: User's monthly salary
+        - user_priorities: Dictionary of categories with priority values
+        - user_plan: User's initial spending plan
+        - num_children: Number of children
+        - has_car: Boolean indicating car ownership
+        - has_house: Boolean indicating house ownership
+        - fixed_categories: Dictionary of categories with fixed values
+        - dataset: DataFrame containing spending pattern data
+        
+    Output:
+        - The optimized spending plan as a dictionary
+    """
+    # Create problem instance
+    problem = SpendingAllocationProblem(
+        salary=user_salary,
+        priorities=user_priorities,
+        user_input_plan=user_plan,
+        num_children=num_children,
+        has_car=has_car,
+        has_house=has_house,
+        fixed_categories=fixed_categories,
+        dataset=dataset
+    )
     
-    # Create a bar chart showing allocation vs priority
-    plt.figure(figsize=(12, 6))
-    indices = np.arange(len(categories))
-    width = 0.35
+    # Run A* search
+    goal_node = astar_search(problem)
     
-    # Normalized amounts (as percentage of salary)
-    normalized_amounts = [(amount/problem.salary)*100 for amount in amounts]
+    if goal_node:
+        # Reconstruct path
+        path = reconstruct_path(goal_node)
+        
+        # Return optimized plan
+        return goal_node.state
     
-    # Normalized priorities (as percentage of max priority)
-    priorities = [problem.priorities[cat] for cat in categories]
-    normalized_priorities = [(p/problem.max_priority)*100 for p in priorities]
-    
-    plt.bar(indices - width/2, normalized_amounts, width, label='Allocation %')
-    plt.bar(indices + width/2, normalized_priorities, width, label='Priority %')
-    
-    plt.xlabel('Categories')
-    plt.ylabel('Percentage')
-    plt.title('Spending Allocation vs Priority')
-    plt.xticks(indices, categories, rotation=45)
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
-    
-    # Print detailed allocation plan
-    print("=== DETAILED SPENDING PLAN ===")
-    print(f"Total Salary: {problem.salary} DZD")
-    print("Category Allocations:")
-    for cat in categories:
-        print(f"  {cat}: {spending_plan[cat]} DZD ({percentages[cat]:.1f}%) - Priority: {problem.priorities[cat]}")
-    
-    print(f"Total Allocated: {total} DZD")
-    print(f"Savings: {problem.salary - total} DZD ({((problem.salary - total)/problem.salary)*100:.1f}%)")
-    print(f"Final Score (Total Cost): {solution_node.g}")
-    print(f"Path Length: {solution_node.depth}")
+    return user_plan  # Return original plan if no better plan found
 
 # ------------------------------
 # 5. Example Usage
 # ------------------------------
-def run_example():
-    """Run an example search with sample data."""
-    # Sample data
-    salary = 120000  # 120,000 DZD monthly salary
-    categories = ["Housing", "Food", "Transportation", "Healthcare", "Education", "Entertainment"]
-    priorities = {
-        "Housing": 5,
-        "Food": 4,
-        "Transportation": 3,
-        "Healthcare": 5,
-        "Education": 4,
-        "Entertainment": 2
+
+# Create a sample dataset
+def create_sample_dataset():
+    """Create a sample dataset for demonstration purposes."""
+    data = {
+        'food': [800, 900, 1000, 1200, 1500],
+        'housing': [5000, 6000, 7000, 8000, 9000],
+        'transport': [200, 300, 400, 500, 600],
+        'education': [300, 400, 500, 600, 700],
+        'entertainment': [200, 300, 400, 500, 600],
+        'savings': [1000, 1500, 2000, 2500, 3000],
+        'children': [0, 1, 2, 0, 1],
+        'has_car': [True, False, True, False, True],
+        'has_house': [False, True, True, False, False]
     }
-    fixed_expenses = {
-        "Housing": 30000,  # Fixed rent
-        "Healthcare": 5000  # Fixed health insurance
+    return pd.DataFrame(data)
+
+# Example usage
+def example_usage():
+    # Create sample dataset
+    dataset = create_sample_dataset()
+    
+    # User inputs
+    user_salary = 15000
+    user_priorities = {
+        'food': 1,
+        'housing': 2,
+        'transport': 4,
+        'education': 3,
+        'entertainment': 5,
+        'savings': 6
+    }
+    user_plan = {
+        'food': 1200,
+        'housing': 7000,
+        'transport': 400,
+        'education': 500,
+        'entertainment': 300,
+        'savings': 2000
+    }
+    fixed_categories = {
+        'housing': 7000  # Housing cost is fixed
     }
     
-    # Create problem instance
-    problem = SpendingAllocationProblem(
-        salary=salary,
-        categories=categories,
-        priorities=priorities,
-        fixed_expenses=fixed_expenses
+    # Optimize the plan
+    optimized_plan = optimize_user_plan(
+        user_salary=user_salary,
+        user_priorities=user_priorities,
+        user_plan=user_plan,
+        num_children=1,
+        has_car=True,
+        has_house=True,
+        fixed_categories=fixed_categories,
+        dataset=dataset
     )
     
-    # Create search instance
-    search = SpendingSearch(problem)
+    # Display results
+    print("\nUser's Original Plan:")
+    print(plan_to_dataframe(user_plan))
     
-    # Run search
-    solution = search.search(max_iterations=500)
+    print("\nOptimized Plan:")
+    print(plan_to_dataframe(optimized_plan))
     
-    # Visualize results
-    if solution:
-        visualize_spending_plan(solution, problem)
-    else:
-        print("No solution found")
+    # Calculate savings
+    original_savings = user_salary - sum(user_plan.values())
+    optimized_savings = user_salary - sum(optimized_plan.values())
+    
+    print(f"\nOriginal Savings: {original_savings} ({original_savings/user_salary:.1%} of salary)")
+    print(f"Optimized Savings: {optimized_savings} ({optimized_savings/user_salary:.1%} of salary)")
+    print(f"Improvement: {optimized_savings - original_savings} ({(optimized_savings - original_savings)/original_savings:.1%})")
 
-# Run the example
-# Uncomment to run:
-run_example()
+if __name__ == "__main__":
+    example_usage()
