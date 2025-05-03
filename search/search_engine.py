@@ -25,7 +25,7 @@ class BudgetProblem:
         self.initial_state = initial_state
         self.salary = salary
         self.dataset = filtered_dataset
-        self.priorities = priorities  # Dictionary of {category: priority_weight}
+        self.priorities = priorities
         self.dataset_avg = self._calculate_dataset_averages()
         self.best_savings = 0
         self.best_node = None
@@ -52,18 +52,17 @@ class BudgetProblem:
         total = total_spending + current_savings
         
         spending_valid = total_spending <= self.salary
-        savings_valid = current_savings >= (0.2 * self.salary)
+        savings_valid = current_savings >= (0.25 * self.salary)  # Aim for 25% savings
         total_valid = abs(total - self.salary) < 0.01
         
         if current_savings > self.best_savings and spending_valid:
             self.best_savings = current_savings
-            self.best_node = state
+            self.best_node = deepcopy(state)
             
         return spending_valid and savings_valid and total_valid
 
     def get_valid_actions(self, current_state):
         actions = {}
-        # Sort categories by priority (highest priority first)
         sorted_categories = sorted(self.priorities.keys(),
                                  key=lambda x: self.priorities[x])
         
@@ -84,7 +83,6 @@ class BudgetProblem:
                 new_state = deepcopy(current_state)
                 new_state[category] = value
                 
-                # Calculate cost with priority weighting
                 base_cost = abs(value - self.dataset_avg.get(category, 0))
                 priority_weight = 1.0 / self.priorities.get(category, 1)
                 g = node.g + (base_cost * priority_weight)
@@ -100,36 +98,19 @@ class BudgetProblem:
         current_savings = state.get('Savings', 0)
         total = total_spending + current_savings
         
-        # Priority-weighted components
-        savings_shortfall = max(0, (0.2 * self.salary) - current_savings)
-        overspending = max(0, total_spending - self.salary)
+        savings_shortfall = max(0, (0.3 * self.salary) - current_savings)
+        overspending = max(0, total_spending - (0.9 * self.salary))
         total_deviation = abs(total - self.salary)
         
-        # Apply priority weights to violations
         priority_weights = {
-            'overspending': 1000,
-            'savings_shortfall': 100 * (1 + max(self.priorities.values())),
+            'overspending': 1500,
+            'savings_shortfall': 800,
             'total_deviation': 1
         }
         
         return (overspending * priority_weights['overspending'] +
                 savings_shortfall * priority_weights['savings_shortfall'] +
                 total_deviation * priority_weights['total_deviation'])
-
-    def print_node(self, node):
-        total = sum(node.state.values())
-        savings = node.state.get('Savings', 0)
-        spending = total - savings
-        
-        print(f"\nDepth: {node.depth} | Action: {node.action}")
-        print("Current Plan:")
-        # Print categories in priority order
-        for cat in sorted(self.priorities.keys(), key=lambda x: self.priorities[x]):
-            if cat in node.state:
-                print(f"  {cat} (Priority {self.priorities[cat]}): {node.state[cat]}")
-        print(f"Total: {total:.2f} | Spending: {spending:.2f} | Savings: {savings:.2f}")
-        print(f"g: {node.g:.2f} | f: {node.f:.2f}")
-        print("-" * 60)
 
 class GeneralSearch:
     def __init__(self, problem):
@@ -152,10 +133,8 @@ class GeneralSearch:
             _, node = frontier.get()
             self.nodes_expanded += 1
             
-            self.problem.print_node(node)
-
             if self.problem.is_goal(node.state):
-                print(f"\n>>> GOAL FOUND AFTER {self.nodes_expanded} NODES EXPANDED <<<")
+                self.print_final_results(node)
                 return node
 
             explored.add(hash(node))
@@ -167,19 +146,61 @@ class GeneralSearch:
                     frontier_states.add(child_hash)
         
         if self.problem.best_node:
-            print(f"\nBest solution found (savings: {self.problem.best_savings:.2f})")
+            self.print_final_results(BudgetNode(self.problem.best_node), optimal=False)
             return BudgetNode(self.problem.best_node)
         
-        print("\nNo valid solution found")
+        print("\nNo valid solution found that meets all constraints")
         return None
 
+    def print_final_results(self, solution, optimal=True):
+        initial = self.problem.initial_state
+        priorities = self.problem.priorities
+        salary = self.problem.salary
+        
+        print("\n" + "="*60)
+        print(" " * 20 + "BUDGET OPTIMIZATION RESULTS")
+        print("="*60)
+        
+        # Print User Priorities
+        print("\nUSER PRIORITIES (1 = Highest Priority):")
+        print("-"*40)
+        for category, priority in sorted(priorities.items(), key=lambda x: x[1]):
+            print(f"{category + ':':<15} Priority {priority}")
+        
+        # Print Initial Plan
+        print("\nINITIAL SPENDING PLAN:")
+        print("-"*40)
+        total_initial = sum(initial.values())
+        savings_initial = initial.get('Savings', 0)
+        for category in sorted(priorities.keys(), key=lambda x: priorities[x]):
+            print(f"{category + ':':<15} {initial[category]:>10.2f}")
+        print("-"*40)
+        print(f"{'Total:':<15} {total_initial:>10.2f}")
+        print(f"{'Spending:':<15} {total_initial-savings_initial:>10.2f}")
+        print(f"{'Savings:':<15} {savings_initial:>10.2f} ({savings_initial/salary:.1%})")
+        
+        # Print Optimal Plan
+        opt_label = "OPTIMAL PLAN" if optimal else "BEST FOUND PLAN"
+        print(f"\n{opt_label}:")
+        print("-"*40)
+        total_optimal = sum(solution.state.values())
+        savings_optimal = solution.state.get('Savings', 0)
+        for category in sorted(priorities.keys(), key=lambda x: priorities[x]):
+            change = solution.state[category] - initial[category]
+            arrow = "↑" if change > 0 else ("↓" if change < 0 else "→")
+            print(f"{category + ':':<15} {solution.state[category]:>10.2f} {arrow} {abs(change):.2f}")
+        print("-"*40)
+        print(f"{'Total:':<15} {total_optimal:>10.2f}")
+        print(f"{'Spending:':<15} {total_optimal-savings_optimal:>10.2f}")
+        print(f"{'Savings:':<15} {savings_optimal:>10.2f} ({savings_optimal/salary:.1%})")
+        print(f"\nNodes expanded: {self.nodes_expanded}")
+        print("="*60 + "\n")
+
 def load_dataset(filename):
-    """Load dataset from CSV file"""
     with open(filename, mode='r') as file:
         return list(csv.DictReader(file))
 
 def filter_dataset(dataset, conditions):
-    """Filter dataset based on user conditions"""
     filtered = []
     for row in dataset:
         match = all(str(row[k]) == str(v) for k, v in conditions.items())
@@ -200,12 +221,12 @@ def main():
             if key in ['Food', 'Transport', 'Savings', 'Education']:
                 row[key] = float(row[key])
     
-    # User priorities (1 = highest priority)
+    # User configuration
     user_priorities = {
-        'Food': 1,      # Highest priority
+        'Food': 1,
         'Education': 2,
         'Transport': 3,
-        'Savings': 4    # Lowest priority
+        'Savings': 4
     }
     
     initial_plan = {
@@ -215,37 +236,26 @@ def main():
         'Savings': 0
     }
     
+    salary = 2000
+    
     problem = BudgetProblem(
         initial_state=initial_plan,
-        salary=2000,
+        salary=salary,
         filtered_dataset=dataset,
         priorities=user_priorities
     )
     
-    print("=== STARTING PRIORITY-BASED A* SEARCH ===")
-    print("User Priorities:")
-    for cat, prio in sorted(user_priorities.items(), key=lambda x: x[1]):
-        print(f"  {cat}: Priority {prio}")
-    print(f"\nInitial plan totals: {sum(initial_plan.values())}")
-    print(f"Target salary: {problem.salary}")
+    print("\nStarting budget optimization...")
+    print(f"Target salary: {salary}")
+    print(f"Minimum savings target: {0.25*salary} (25%)")
     
     search = GeneralSearch(problem)
     solution = search.search()
     
     if solution:
-        print("\n=== OPTIMAL PLAN ===")
-        total = sum(solution.state.values())
-        savings = solution.state.get('Savings', 0)
-        
-        # Print in priority order
-        for cat in sorted(user_priorities.keys(), key=lambda x: user_priorities[x]):
-            print(f"{cat} (Priority {user_priorities[cat]}): {solution.state[cat]:.2f}")
-        
-        print(f"\nTotal: {total:.2f}")
-        print(f"Spending: {total-savings:.2f} (<= {problem.salary:.2f})")
-        print(f"Savings: {savings:.2f} (>= {0.2 * problem.salary:.2f})")
+        print("\nOptimization complete!")
     else:
-        print("No valid solution found")
+        print("\nFinished search - no perfect solution found")
 
 if __name__ == "__main__":
     main()
