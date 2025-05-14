@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Money Spending Management</title>
+    <link rel="stylesheet" href="interface.css">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <header>
+        <nav>
+            <ul>
+                <li><a href="#signup">Sign Up</a></li>
+                <li><a href="#login">Login</a></li>
+                <li><a href="#about">About</a></li>
+            </ul>
+        </nav>
+        <div class="hero">
+            <h1>Smart Money Management</h1>
+            <p>Track your spending and take control of your finances.</p>
+            <button class="get-started-button" onclick="document.getElementById('budgetForm').scrollIntoView();">Get Started</button>
+        </div>
+    </header>
+
+    <main>
+        <section class="features">
+            <div class="feature">
+                <img src="C:\Users\ANIS INFO\Downloads\pexels-mikhail-nilov-7735796.jpg" alt="Track Your Spending" class="feature-image">
+                <h2>Track Your Spending</h2>
+                <p>Get insights into your spending habits and budget effectively.</p>
+            </div>
+            <div class="feature">
+                <img src="C:\Users\ANIS INFO\Downloads\pexels-karolina-grabowska-5900135.jpg" alt="Set Financial Goals" class="feature-image">
+                <h2>Set Financial Goals</h2>
+                <p>Define and achieve your savings goals with ease.</p>
+            </div>
+            <div class="feature">
+                <img src="C:\Users\ANIS INFO\Downloads\pexels-karolina-grabowska-4968668.jpg" alt="Manage Investments" class="feature-image">
+                <h2>Manage Investments</h2>
+                <p>Keep track of your investments and grow your wealth.</p>
+            </div>
+        </section>
+
+        <div class="container" id="budgetForm">
+            <h2>Budgeting Form</h2>
+            <form id="expenseForm">
+                <label for="salary">Salary (DA):</label>
+                <input type="number" id="salary" required>
+
+                <h3>House Information</h3>
+                <label for="own_house">Do you own a house? (yes/no):</label>
+                <input type="text" id="own_house" pattern="yes|no" required>
+
+                <label for="house_rent">If no, what's your house rent (DA)?:</label>
+                <input type="number" id="house_rent">
+
+                <h3>Car Information</h3>
+                <label for="own_car">Do you own a car? (yes/no):</label>
+                <input type="text" id="own_car" pattern="yes|no" required>
+
+                <label for="car_expenses">Car expenses (DA) (if any):</label>
+                <input type="number" id="car_expenses">
+
+                <h3>Family Information</h3>
+                <label for="married">Are you married? (yes/no):</label>
+                <input type="text" id="married" pattern="yes|no" required>
+
+                <label for="number_of_children">Number of children (if any):</label>
+                <input type="number" id="number_of_children" min="0">
+
+                <h3>Monthly Expenses (enter amount in DA if applicable)</h3>
+                <label for="food">Food:</label>
+                <input type="number" id="food">
+
+                <label for="transport">Transport:</label>
+                <input type="number" id="transport">
+
+                <label for="education">Education:</label>
+                <input type="number" id="education">
+
+                <label for="healthcare">Healthcare:</label>
+                <input type="number" id="healthcare">
+
+                <label for="utilities">Utilities:</label>
+                <input type="number" id="utilities">
+
+                <label for="clothing">Clothing:</label>
+                <input type="number" id="clothing">
+
+                <label for="entertainment">Entertainment:</label>
+                <input type="number" id="entertainment">
+
+                <label for="sports">Sports:</label>
+                <input type="number" id="sports">
+
+                <label for="savings">Savings:</label>
+                <input type="number" id="savings">
+
+                <button type="button" class="submit-button" onclick="generateOutput()">Generate Budget</button>
+            </form>
+        </div>
+
+        <div class="container output-container" id="outputForm" style="display: none;">
+            <h2>Your Budget Analysis</h2>
+            <div class="output-section">
+                <h3>Income</h3>
+                <p>Salary: <span id="output-salary">100,000</span> DA</p>
+            </div>
+
+            <div class="output-section">
+                <h3>Fixed Expenses</h3>
+                <p>House Rent: <span id="output-house_rent">20,000</span> DA</p>
+                <p>Car Expenses: <span id="output-car_expenses">20,000</span> DA</p>
+            </div>
+
+            <div class="output-section">
+                <h3>Monthly Expenses</h3>
+                <p>Food: <span id="output-food">6,057</span> DA</p>
+                <p>Transport: <span id="output-transport">9,089</span> DA</p>
+                <p>Education: <span id="output-education">1,520</span> DA</p>
+                <p>Healthcare: <span id="output-healthcare">6,308</span> DA</p>
+                <p>Utilities: <span id="output-utilities">2,807</span> DA</p>
+                <p>Clothing: <span id="output-clothing">8,656</span> DA</p>
+                <p>Entertainment: <span id="output-entertainment">4,651</span> DA</p>
+                <p>Sports: <span id="output-sports">5,696</span> DA</p>
+                <p>Savings: <span id="output-savings">15,216</span> DA</p>
+            </div>
+
+            <div class="output-section total-section">
+                <h3>Summary</h3>
+                <p>Total Expenses: <span id="output-total-expenses">0</span> DA</p>
+                <p>Remaining Balance: <span id="output-balance">0</span> DA</p>
+            </div>
+
+            <button class="print-button" onclick="window.print()">Print Budget</button>
+        </div>
+    </main>
+
+    <footer>
+        <p>&copy; 2025 Money Management. All Rights Reserved</p>
+    </footer>
+
+    <script>
+        function generateOutput() {
+            // Hardcoded values for expenses
+            const salary = 100000;
+            const houseRent = 20000;
+            const carExpenses = 20000;
+            const food = 6057;
+            const transport = 9089;
+            const education = 1520;
+            const healthcare = 6308;
+            const utilities = 2807;
+            const clothing = 8656;
+            const entertainment = 4651;
+            const sports = 5696;
+            const savings = 15216;
+        
+            // Calculate total expenses
+            const totalExpenses = houseRent + carExpenses + food + transport + education + healthcare + utilities + clothing + entertainment + sports + savings;
+        
+            // Calculate remaining balance
+            const remainingBalance = salary - totalExpenses;
+        
+            // Set values in output
+            document.getElementById('outputForm').style.display = 'block';
+            document.getElementById('output-salary').textContent = salary.toLocaleString();
+            document.getElementById('output-house_rent').textContent = houseRent.toLocaleString();
+            document.getElementById('output-car_expenses').textContent = carExpenses.toLocaleString();
+            document.getElementById('output-food').textContent = food.toLocaleString();
+            document.getElementById('output-transport').textContent = transport.toLocaleString();
+            document.getElementById('output-education').textContent = education.toLocaleString();
+            document.getElementById('output-healthcare').textContent = healthcare.toLocaleString();
+            document.getElementById('output-utilities').textContent = utilities.toLocaleString();
+            document.getElementById('output-clothing').textContent = clothing.toLocaleString();
+            document.getElementById('output-entertainment').textContent = entertainment.toLocaleString();
+            document.getElementById('output-sports').textContent = sports.toLocaleString();
+            document.getElementById('output-savings').textContent = savings.toLocaleString();
+        
+            document.getElementById('output-total-expenses').textContent = totalExpenses.toLocaleString();
+            document.getElementById('output-balance').textContent = remainingBalance.toLocaleString();
+        
+            // Scroll to output
+            document.getElementById('outputForm').scrollIntoView({ behavior: 'smooth' });
+        }
+    </script>
+</body>
+</html>
